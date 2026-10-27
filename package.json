@@ -20,7 +20,9 @@
 		"packages/*"
 	],
 	"scripts": {
-		"test": "npm run test --workspaces --if-present",
+		"test": "npm run test:contract && npm run test --workspaces --if-present",
+		"test:packages": "npm run test --workspaces --if-present",
+		"test:contract": "node --test --experimental-strip-types \"tests/**/*.test.ts\"",
 		"typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present",
 		"check": "npm run typecheck && npm run test"
 	},
