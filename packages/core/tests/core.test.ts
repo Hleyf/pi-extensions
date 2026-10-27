@@ -177,6 +177,133 @@ test("a user override beats the packaged default", () => {
 	}
 });
 
+test("an override MERGES onto the packaged default rather than replacing it", () => {
+	const packaged = mkdtempSync(join(tmpdir(), "core-merge-"));
+	const agentDir = mkdtempSync(join(tmpdir(), "core-merge-agent-"));
+	const previousAgentDir = process.env.PI_AGENT_DIR;
+	process.env.PI_AGENT_DIR = agentDir;
+	try {
+		mkdirSync(packaged, { recursive: true });
+		mkdirSync(join(agentDir, "policies"), { recursive: true });
+
+		// The packaged policy has rules; the user's file mentions none of them.
+		writeFileSync(
+			join(packaged, "git.json"),
+			JSON.stringify({
+				domain: "git",
+				protected_branches: ["main", "master"],
+				always_block: [{ pattern: "packaged-block", reason: "packaged" }],
+				always_confirm: [{ pattern: "packaged-confirm" }],
+				always_allow: [{ pattern: "^packaged" }],
+			}),
+		);
+		writeFileSync(
+			join(agentDir, "policies", "git.json"),
+			JSON.stringify({ domain: "git", protected_branches: ["main", "master", "production"] }),
+		);
+
+		const merged = loadPolicy("git", packaged);
+
+		// The user's configuration wins.
+		assert.deepEqual(merged.protected_branches, ["main", "master", "production"]);
+		// The packaged rules are still there: an override that says nothing
+		// about a rule must not silently remove it.
+		assert.equal(merged.always_block.length, 1);
+		assert.equal(merged.always_block[0]?.pattern, "packaged-block");
+		assert.equal(merged.always_confirm.length, 1);
+		assert.equal(merged.always_allow.length, 1);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_AGENT_DIR;
+		else process.env.PI_AGENT_DIR = previousAgentDir;
+		rmSync(packaged, { recursive: true, force: true });
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+});
+
+test("an override ADDS its own rules to the packaged ones", () => {
+	const packaged = mkdtempSync(join(tmpdir(), "core-add-"));
+	const agentDir = mkdtempSync(join(tmpdir(), "core-add-agent-"));
+	const previousAgentDir = process.env.PI_AGENT_DIR;
+	process.env.PI_AGENT_DIR = agentDir;
+	try {
+		mkdirSync(packaged, { recursive: true });
+		mkdirSync(join(agentDir, "policies"), { recursive: true });
+		writeFileSync(
+			join(packaged, "local.json"),
+			JSON.stringify({
+				domain: "local",
+				always_block: [{ pattern: "packaged-block" }],
+				always_confirm: [],
+				always_allow: [],
+			}),
+		);
+		writeFileSync(
+			join(agentDir, "policies", "local.json"),
+			JSON.stringify({
+				domain: "local",
+				always_block: [{ pattern: "user-block" }],
+				always_confirm: [],
+				always_allow: [],
+			}),
+		);
+		const merged = loadPolicy("local", packaged);
+		assert.deepEqual(
+			merged.always_block.map((rule) => rule.pattern),
+			["packaged-block", "user-block"],
+		);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_AGENT_DIR;
+		else process.env.PI_AGENT_DIR = previousAgentDir;
+		rmSync(packaged, { recursive: true, force: true });
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+});
+
+test("a path-scoped rule is replaced by command name, leaving the others alone", () => {
+	const packaged = mkdtempSync(join(tmpdir(), "core-scope-merge-"));
+	const agentDir = mkdtempSync(join(tmpdir(), "core-scope-merge-agent-"));
+	const previousAgentDir = process.env.PI_AGENT_DIR;
+	process.env.PI_AGENT_DIR = agentDir;
+	try {
+		mkdirSync(packaged, { recursive: true });
+		mkdirSync(join(agentDir, "policies"), { recursive: true });
+		writeFileSync(
+			join(packaged, "local.json"),
+			JSON.stringify({
+				domain: "local",
+				always_block: [],
+				always_confirm: [],
+				always_allow: [],
+				path_scoped: [
+					{ command: "rm", allowed_roots: ["<project>"], reason: "packaged rm" },
+					{ command: "mv", allowed_roots: ["<project>"], reason: "packaged mv" },
+				],
+			}),
+		);
+		writeFileSync(
+			join(agentDir, "policies", "local.json"),
+			JSON.stringify({
+				domain: "local",
+				always_block: [],
+				always_confirm: [],
+				always_allow: [],
+				path_scoped: [{ command: "rm", allowed_roots: ["<projects>"], reason: "user rm" }],
+			}),
+		);
+		const merged = loadPolicy("local", packaged);
+		assert.equal(merged.path_scoped?.length, 2);
+		const rm = merged.path_scoped?.find((rule) => rule.command === "rm");
+		const mv = merged.path_scoped?.find((rule) => rule.command === "mv");
+		assert.deepEqual(rm?.allowed_roots, ["<projects>"], "the user's rule for rm wins");
+		assert.equal(mv?.reason, "packaged mv", "the packaged rule for mv is untouched");
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_AGENT_DIR;
+		else process.env.PI_AGENT_DIR = previousAgentDir;
+		rmSync(packaged, { recursive: true, force: true });
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+});
+
 test("loadPolicySet loads every requested domain", () => {
 	const packaged = mkdtempSync(join(tmpdir(), "core-domains-"));
 	try {

@@ -34,13 +34,29 @@ pi install git:github.com/hleyf/pi-extensions
 
 ## Configuring a policy
 
-Every package ships a default policy file. To tune it, copy the file to the
-user policy directory — a user override always beats the packaged default:
+Every package ships a default policy file. To tune it, write an override to the
+user policy directory. An override **merges onto** the packaged default rather
+than replacing it, so a file that mentions one thing does not silently remove
+the rest:
 
 ```sh
 mkdir -p ~/.pi/agent/policies
-cp ~/.pi/agent/npm/node_modules/pi-git-policy/policies/git.json ~/.pi/agent/policies/git.json
+cat > ~/.pi/agent/policies/git.json <<'JSON'
+{
+  "domain": "git",
+  "protected_branches": ["main", "master", "production", "live"]
+}
+JSON
 ```
+
+| What the override says | What happens |
+|---|---|
+| `protected_branches`, `allowed_roots` | Your value wins outright. |
+| `always_block`, `always_confirm`, `always_allow` | Your rules are **added** to the packaged ones. |
+| `path_scoped` | Merged by command name: your rule for one command replaces the packaged rule for that command, and the others are untouched. |
+
+So the file above adds `production` and `live` to the protected branches and
+leaves every packaged rule in force.
 
 | Package | Domain | File |
 |---|---|---|
