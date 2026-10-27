@@ -266,6 +266,41 @@ and are erased before the module runs.
 - A local install is a live path reference, so edits are picked up without a
   reinstall.
 
+### S14 — The deployment
+
+- **Repository:** `github.com/hleyf/pi-extensions`, public, MIT.
+- **Install:** `pi install git:github.com/hleyf/pi-extensions` installs all three
+  packages; `pi install npm:pi-bash-policy` installs one. A local install is a
+  live path reference, so edits are picked up without a reinstall.
+- **CI:** GitHub Actions runs the typecheck and the suite on Node 22 and 24.
+  The scratch-waiver test needs `bun`, because node cannot strip types inside
+  `node_modules`, so the workflow installs it and the test skips without it.
+- **Branch protection on `main`:** a pull request is required, the CI check must
+  pass and the branch must be up to date, force pushes and deletions are
+  refused, and administrators are included. The required contexts name the
+  matrix jobs (`check (22)`, `check (24)`), so changing the matrix means
+  updating the protection.
+
+### S15 — Two things the build exposed
+
+**The protected-branch rule must fire on a push command, not on prose that
+mentions one.** A commit message that says "explain why a push to a protected
+branch is refused" contains the words, and a rule matched anywhere in the
+command string refused the commit that documented the rule — including this
+repository's own commits.
+
+**The branch lock reads the branch at admission, before the command runs.** A
+compound command that switches branch and then commits is therefore judged on
+the branch it started on. Safe, and worth knowing: the branch switch has to be
+its own command.
+
+**The override must MERGE, not replace.** A user who wanted to add one branch
+to the protected list would otherwise have had to copy the whole packaged
+file, because a file mentioning only that list would have silently dropped the
+packaged force-push and reset --hard rules with it. The override now merges:
+configuration values win outright, rule lists are added, and path-scoped rules
+merge by command name.
+
 ## Tasks
 
 | ID | Specs | Route | Commit |
@@ -284,6 +319,7 @@ and are erased before the module runs.
 | T12 | S12 | inline | core engine unit tests |
 | T13 | S13 | inline | monorepo scaffolding, CI, licence, README |
 | T14 | S13 | inline | install into Pi, atomic cutover, end-to-end verification |
+| T15 | S14, S15 | inline | CI, branch protection, override merge, prose false positive |
 
 No Engram mirror: no `mem_*` tool is available in this session.
 
