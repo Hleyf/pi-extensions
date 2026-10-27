@@ -48,19 +48,24 @@ packaging is what is tested.
 5. **The root resolves as a module.** The root's `main` points at `index.ts`,
    which re-exports the shared engine. The "Cannot find module" failure is
    then impossible for this path, whatever a loader does with the manifest.
+   (`main` is what carries this: a directory is resolved by its `main` or an
+   index file, and `exports` is not consulted for a path. `exports` is here
+   for the bare-specifier import, `import "pi-extensions"`.)
 
 ## Where each rule is enforced
 
 | Rule | Enforced by |
 |---|---|
-| 1, 2, 3, 5 | `tests/load-contract.test.ts` |
-| 4, and the whole contract as Pi sees it | `tests/pi-loads-repository.test.ts` |
+| 1, 2, 3, 4, 5 | `tests/load-contract.test.ts` |
+| The whole contract as Pi sees it | `tests/pi-loads-repository.test.ts` |
 | The path this machine's configuration points at | `npm run check:installed` |
 
 `tests/pi-loads-repository.test.ts` is the end-to-end one: it points Pi's own
 loader at this repository through a scratch agent directory and asserts that
 Pi resolves both extensions, registers their `tool_call` handlers, and reports
-no errors. It reads nothing outside the repository, so it holds in CI.
+no errors. The test itself reads nothing outside the repository, so it holds
+in CI. Pi's loader, once it runs, reads the user's own skill directories —
+as it does on every startup anywhere.
 
 ## The machine-local half
 

@@ -347,10 +347,13 @@ that reads the configuration and never writes it.
 
 **The guard must be able to fail.** A test that cannot fail is the defect
 this work exists to remove, so the contract was broken on purpose in a
-scratch copy and the failure observed: with the manifest removed, all six
-assertions fail and the loader test reports the very error above; with a
-manifest naming a file that does not exist, four fail; with a manifest naming
-only one of the two extensions, the drift assertion fails.
+scratch copy and the failure observed: with the manifest, the module entry
+and the index file all removed — the shape the monorepo restructure left
+behind — all six assertions fail and the loader test reports the very error
+above; with only the manifest removed, five fail and the loader reports
+that the root no longer exports a factory; with a manifest naming a file
+that does not exist, four fail; with a manifest naming only one of the two
+extensions, the drift assertion fails.
 
 ## Tasks
 
@@ -523,10 +526,13 @@ where it can be removed.
   manifest keeps the fix inside the repository and makes it self-describing.
   The second way also leaves the root unnamed as far as Pi is concerned, and
   leaves the next restructure free to break it again.
-- **The root gets a module entry as well.** `main`/`exports` point at a root
-  `index.ts` that re-exports the engine. The manifest is what Pi reads; the
-  entry point is what makes "Cannot find module" impossible for this path
-  even for a loader that ignores the manifest. Both halves are asserted.
+- **The root gets a module entry as well.** `main` points at a root
+  `index.ts` that re-exports the engine, and `exports` names the same file
+  for a bare-specifier import. The manifest is what Pi reads; the module
+  entry is what makes "Cannot find module" impossible for this path even for
+  a loader that ignores the manifest. `main` is the load-bearing half: a
+  directory is resolved by its `main` or an index file, and `exports` is not
+  consulted for a path. Both halves are asserted.
 - **The contract is in the suite; the configuration is in a separate
   opt-in check.** The suite must hold in CI, so it may not read the owner's
   home directory. `npm run check:installed` may, and is never run by CI.
@@ -546,11 +552,12 @@ where it can be removed.
   '<repo>'`, with the require stack inside Pi's own extension loader.
 - The fix, same loader, same settings: two extensions resolved, zero errors,
   zero warnings.
-- The guard, broken on purpose in a scratch copy: all six assertions fail
-  with the manifest removed (the loader assertion carrying the exact
-  "Cannot find module" text); four fail with a manifest naming a file that
-  does not exist; the drift assertion fails with a manifest naming only one
-  of the two extensions.
+- The guard, broken on purpose in a scratch copy: with the manifest, the
+  module entry and the index file removed — the shape the monorepo restructure
+  left behind — all six assertions fail and the loader assertion carries the
+  exact "Cannot find module" text; with only the manifest removed, five fail;
+  with a manifest naming a file that does not exist, four fail; with a
+  manifest naming only one of the two extensions, the drift assertion fails.
 - The machine-local check, against a configuration pointing at the broken
   copy: it names the failure and exits non-zero; against the fixed copy it
   reports every configured path as loading.
@@ -574,3 +581,62 @@ different reviews, which is the opposite of what the guard is for. The
 commits are the slices a reviewer can take one at a time, and the earlier
 pull requests in this repository were larger than the budget as well (1869
 and 992 inserted lines).
+
+### Verification of this round
+
+**The native review could not be collected.** The native review was started
+through the review controller — three lenses, risk, readability and
+reliability, on the committed range — and the lineage was created. Every
+capture attempt was refused by the controller with "collectBinding is missing
+or stale for current STATUS", for the one-slot route and for the whole group,
+with the binding copied exactly as the status issued it. The controller
+negotiates its own fresh status for the capture, and that status does not
+carry the collect inputs the public status publishes. The review is
+informational and authorises nothing, so the round continued without it and
+the lineage is left open rather than forced.
+
+**An independent verifier did the work instead.** A read-only verifier was
+pointed at the committed range and asked six questions: can the guard fail,
+is the suite machine-independent, are the assertions real, does the
+machine-local script mirror Pi's rules, is the extensions' behaviour
+untouched, and is the gate green. Its answers: yes, yes (with one caveat
+about process-level reads), yes, no, yes, and green except the pre-existing
+failure above.
+
+**What the verifier found, and what was done about it.** The script's rules
+were close to Pi's but not Pi's, and a check that reports a different
+verdict from the platform it checks is worse than no check. Seven
+divergences were reproduced against Pi's own loader as the oracle and fixed:
+
+- a manifest is a manifest as soon as `pi` is an object: `pi: {}` and a
+  manifest naming only skills are packages to Pi, and neither reaches the
+  module loader. The script used to call both a crash.
+- a manifest entry may be a glob or an override pattern. Pi expands the glob
+  and lets the pattern select; the script resolved both literally.
+- a manifest entry that does not exist is skipped SILENTLY by Pi. The script
+  reports it, deliberately: a policy that silently is not loaded is not
+  loaded. That strictness is stated in the script and in the document.
+- a package directory with a `main` and no manifest loads; only a directory
+  with neither a manifest, a resource directory, nor a module entry reaches
+  the module loader. The script reported the crash for the first case too.
+- project-scope paths resolve against the project's own `.pi` directory, not
+  against the working directory.
+- `~` and `file://` paths expand.
+- a package entry may be an object carrying its `source`.
+
+The verifier also found that a configured extension that does not import was
+reported as loading, because the import check was limited to this
+repository's own files. It now imports every entry it checks, exactly as Pi
+does, and the script says so in its header.
+
+The verdict was then checked against Pi's own loader, scenario by scenario:
+a package with an empty manifest, one with only skills, one whose manifest
+entry is a glob, one with a `main` and no manifest, one with only `exports`,
+one whose extension does not parse, a configured extension file that does
+not parse, a project-scope relative path, and an object-form package entry.
+The script and Pi now agree on all nine.
+
+The documentation was corrected where it overstated: `main` is the
+load-bearing half of the module entry, `exports` is not consulted for a
+path, and the count of assertions that fail depends on how much of the
+contract is broken.

@@ -30,8 +30,20 @@
 // and reports what would load nothing, or would fail loudly.
 //
 // It reads the configuration. It never writes it.
+//
+// IT IMPORTS WHAT IT CHECKS
+// A module that does not import does not load, and Pi says so at startup.
+// Checking that means importing the extension, exactly as Pi does, so this
+// script runs the extension's module-level code. Run it when that is fine.
+//
+// THE RULES ARE MIRRORED, NOT GUESSED
+// Every rule below is a mirror of Pi's own resolution, read from
+// `dist/core/package-manager.js` and `dist/core/pi-manifest.js` in the
+// installed Pi. Where the mirror is deliberately stricter than Pi, it says
+// so: a manifest naming an entry that does not exist is reported, because Pi
+// skips it silently and a policy that silently is not loaded is not loaded.
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, globSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -39,6 +51,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 const PROJECT_DIR = process.cwd();
+/** Pi resolves project-scope entries against the project's own `.pi` directory. */
+const PROJECT_BASE_DIR = join(PROJECT_DIR, ".pi");
 
 const failures = [];
 const notes = [];
@@ -50,6 +64,8 @@ function fail(where, message) {
 function note(message) {
 	notes.push(message);
 }
+
+// --- Pi's rules, mirrored ---------------------------------------------------
 
 /** Pi skips these prefixes: they are installed packages, not local paths. */
 function isLocalPath(value) {
@@ -65,50 +81,65 @@ function isLocalPath(value) {
 	);
 }
 
-/**
- * Pi treats an extension entry as an override pattern rather than a path
- * when it starts with `!`, `+` or `-`, or when it contains a glob character.
- * Such an entry selects or disables discovered resources; it is not a path
- * that could fail to load.
- */
+/** Pi's override-pattern prefixes: they select, they do not name a file. */
 function isOverridePattern(value) {
-	return (
-		value.startsWith("!") ||
-		value.startsWith("+") ||
-		value.startsWith("-") ||
-		value.includes("*") ||
-		value.includes("?")
-	);
+	return value.startsWith("!") || value.startsWith("+") || value.startsWith("-");
 }
 
-/** The `pi` manifest of a package.json, or null. */
+function hasGlobPattern(value) {
+	return value.includes("*") || value.includes("?");
+}
+
+/** Pi's path normalisation: a leading `~` and a `file://` URL both expand. */
+function normalizePath(value) {
+	if (value.startsWith("file://")) return fileURLToPath(value);
+	if (value === "~") return homedir();
+	if (value.startsWith("~/")) return join(homedir(), value.slice(2));
+	return value;
+}
+
+/**
+ * The `pi` manifest of a package.json, or null.
+ *
+ * Mirrors Pi's readPiManifest: the manifest exists as soon as `pi` is an
+ * object, even when it names no extensions. A package with `pi: {}` is a
+ * package to Pi, and it never reaches the module loader.
+ */
 function readPiManifest(packageJsonPath) {
+	let pkg;
 	try {
-		const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-		if (typeof pkg !== "object" || pkg === null || typeof pkg.pi !== "object" || pkg.pi === null) {
-			return null;
-		}
-		const extensions = pkg.pi.extensions;
-		if (!Array.isArray(extensions) || !extensions.every((entry) => typeof entry === "string")) {
-			return null;
-		}
-		return { extensions };
+		pkg = JSON.parse(readFileSync(packageJsonPath, "utf8"));
 	} catch {
 		return null;
 	}
+	if (typeof pkg !== "object" || pkg === null || typeof pkg.pi !== "object" || pkg.pi === null) {
+		return null;
+	}
+	const manifest = {};
+	for (const field of ["extensions", "skills", "prompts", "themes"]) {
+		const entries = pkg.pi[field];
+		if (Array.isArray(entries) && entries.every((entry) => typeof entry === "string")) {
+			manifest[field] = entries;
+		}
+	}
+	return manifest;
 }
 
 /**
- * The extension entries a directory yields, the way Pi resolves them.
+ * The extension entries a directory yields when Pi scans it.
  *
- * Mirrors Pi's own rule: a Pi manifest wins; otherwise an index file; and a
- * directory with neither contributes nothing when it is scanned as an
- * extension directory.
+ * Mirrors Pi's resolveExtensionEntries: the manifest wins, but only with the
+ * entries that exist; otherwise an index file; otherwise nothing.
  */
 function resolveExtensionEntries(dir) {
 	const manifest = readPiManifest(join(dir, "package.json"));
-	if (manifest && manifest.extensions.length > 0) {
-		return manifest.extensions.map((entry) => resolve(dir, entry));
+	if (manifest?.extensions?.length) {
+		const entries = [];
+		for (const entry of manifest.extensions) {
+			const resolved = resolve(dir, entry);
+			if (existsSync(resolved)) entries.push(resolved);
+		}
+		if (entries.length > 0) return entries;
 	}
 	for (const index of ["index.ts", "index.js"]) {
 		const candidate = join(dir, index);
@@ -117,7 +148,13 @@ function resolveExtensionEntries(dir) {
 	return null;
 }
 
-/** The extension entries a scanned extension directory yields, including its contents. */
+/**
+ * The extension entries a scanned extension directory yields, its own
+ * contents included.
+ *
+ * Mirrors Pi's collectAutoExtensionEntries, without the ignore-file rules it
+ * applies to the user's own extension directories.
+ */
 function collectAutoExtensionEntries(dir) {
 	const rootEntries = resolveExtensionEntries(dir);
 	if (rootEntries) return rootEntries;
@@ -135,22 +172,103 @@ function collectAutoExtensionEntries(dir) {
 	return entries;
 }
 
-/** The resources a package directory contributes, the way Pi collects them. */
-function collectPackageResources(dir) {
+/** Mirrors Pi's collectFilesFromPaths: a file is itself, a directory is scanned. */
+function collectFilesFromPaths(paths) {
+	const files = [];
+	for (const path of paths) {
+		if (!existsSync(path)) continue;
+		const stats = statSync(path);
+		if (stats.isFile()) files.push(path);
+		else if (stats.isDirectory()) files.push(...collectAutoExtensionEntries(path));
+	}
+	return files;
+}
+
+/** Mirrors Pi's expandPackageGlob: a glob, resolved under the package root. */
+function expandGlob(pattern, root) {
+	let matches;
+	try {
+		matches = globSync(pattern, { cwd: root });
+	} catch {
+		return [];
+	}
+	return matches
+		.map((match) => resolve(root, match))
+		.filter((path) =>
+			relative(root, path)
+				.split(sep)
+				.every((segment) => segment === ".." || !segment.startsWith(".")),
+		)
+		.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
+ * The files a manifest's entries name.
+ *
+ * Mirrors Pi's collectFilesFromManifestEntries: override patterns select
+ * rather than name, and a glob expands under the package root.
+ */
+function collectFilesFromManifestEntries(entries, root) {
+	const sources = entries.filter((entry) => !isOverridePattern(entry));
+	const resolved = sources.flatMap((entry) =>
+		hasGlobPattern(entry) ? expandGlob(entry, root) : [resolve(root, entry)],
+	);
+	return collectFilesFromPaths(resolved);
+}
+
+/**
+ * The file a directory resolves to when it is handed to the module loader.
+ *
+ * Pi hands a package directory with no manifest and no resource directories
+ * to the module loader, which resolves it the way Node resolves a directory:
+ * the package's `main`, then an index file. `exports` is not consulted for
+ * a path, so a directory with only `exports` does not resolve.
+ */
+function directoryModuleTarget(dir) {
+	let main;
+	try {
+		main = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).main;
+	} catch {
+		main = undefined;
+	}
+	if (typeof main === "string") {
+		const resolved = resolve(dir, main);
+		if (existsSync(resolved)) return resolved;
+	}
+	for (const index of ["index.js", "index.ts", "index.json", "index.node"]) {
+		const candidate = join(dir, index);
+		if (existsSync(candidate)) return candidate;
+	}
+	return null;
+}
+
+/** What Pi makes of a package directory. */
+function inspectPackageDirectory(dir) {
 	const manifest = readPiManifest(join(dir, "package.json"));
-	if (manifest) {
+	if (manifest !== null) {
+		const entries = manifest.extensions ?? [];
+		const missing = entries.filter(
+			(entry) =>
+				!isOverridePattern(entry) &&
+				!hasGlobPattern(entry) &&
+				!existsSync(resolve(dir, entry)),
+		);
 		return {
-			entries: manifest.extensions.map((entry) => resolve(dir, entry)),
-			declared: manifest.extensions,
+			kind: "manifest",
+			files: collectFilesFromManifestEntries(entries, dir),
+			missing,
+			patterns: entries.filter(isOverridePattern),
 		};
 	}
 	for (const resourceType of ["extensions", "skills", "prompts", "themes"]) {
 		if (existsSync(join(dir, resourceType))) {
-			return { entries: [], declared: [] };
+			return { kind: "resource-dir", files: [], resourceType };
 		}
 	}
-	return null;
+	return { kind: "module", files: [], moduleTarget: directoryModuleTarget(dir) };
 }
+
+// --- The checks -------------------------------------------------------------
 
 /** True when `path` is inside this repository. */
 function isInsideRepository(path) {
@@ -159,18 +277,18 @@ function isInsideRepository(path) {
 }
 
 /**
- * Import a module of this repository, because a module that does not import
- * does not load.
+ * Import a module the way Pi imports it, because a module that does not
+ * import does not load.
  */
-async function checkModuleImports(entry, label) {
+async function checkModuleImports(file, label) {
 	try {
-		const module = await import(pathToFileURL(entry).href);
+		const module = await import(pathToFileURL(file).href);
 		if (typeof module.default !== "function") {
-			fail(label, `${relative(REPO_ROOT, entry)} does not export a default extension factory`);
+			fail(label, `${file} does not export a default extension factory, so Pi cannot load it`);
 		}
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		fail(label, `${relative(REPO_ROOT, entry)} does not import: ${message.split("\n")[0]}`);
+		fail(label, `${file} does not import: ${message.split("\n")[0]}`);
 	}
 }
 
@@ -182,39 +300,54 @@ async function checkPackagePath(label, path) {
 	}
 	if (statSync(path).isFile()) {
 		note(`${label} → a file`);
+		await checkModuleImports(path, label);
 		return;
 	}
-	const resources = collectPackageResources(path);
-	if (!resources) {
+
+	const inspected = inspectPackageDirectory(path);
+
+	if (inspected.kind === "manifest") {
+		for (const entry of inspected.missing) {
+			fail(
+				label,
+				`names ${entry}, which does not exist — Pi skips it silently, so the policy is not loaded`,
+			);
+		}
+		for (const pattern of inspected.patterns) {
+			note(`${label} → ${pattern} selects resources by pattern`);
+		}
+		note(`${label} → a package with ${inspected.files.length} extension entr${inspected.files.length === 1 ? "y" : "ies"}`);
+		for (const file of inspected.files) await checkModuleImports(file, label);
+		return;
+	}
+
+	if (inspected.kind === "resource-dir") {
+		const files = collectFilesFromPaths([join(path, "extensions")]);
+		note(`${label} → a package with an ${inspected.resourceType} directory`);
+		for (const file of files) await checkModuleImports(file, label);
+		return;
+	}
+
+	if (inspected.moduleTarget === null) {
 		fail(
 			label,
 			`has no Pi manifest and no entry point — Pi hands the directory to the module loader and fails with "Cannot find module '${path}'"`,
 		);
 		return;
 	}
-	for (const entry of resources.entries) {
-		if (!existsSync(entry)) {
-			fail(label, `names ${relative(path, entry)}, which does not exist`);
-		}
-	}
-	if (resources.entries.length === 0) {
-		note(`${label} → a package with resource directories`);
-		return;
-	}
-	note(`${label} → ${resources.entries.length} extension entr${resources.entries.length === 1 ? "y" : "ies"}`);
-	for (const entry of resources.entries) {
-		if (isInsideRepository(entry)) await checkModuleImports(entry, label);
-	}
+	note(`${label} → a module (${inspected.moduleTarget})`);
+	await checkModuleImports(inspected.moduleTarget, label);
 }
 
 /** Check a configured path that Pi would load as an extension entry. */
-function checkExtensionPath(label, path) {
+async function checkExtensionPath(label, path) {
 	if (!existsSync(path)) {
 		fail(label, "does not exist — Pi skips it silently, so the extension is not loaded");
 		return;
 	}
 	if (statSync(path).isFile()) {
 		note(`${label} → a file`);
+		await checkModuleImports(path, label);
 		return;
 	}
 	const entries = collectAutoExtensionEntries(path);
@@ -222,12 +355,8 @@ function checkExtensionPath(label, path) {
 		fail(label, "yields no extension entry — Pi loads nothing from it");
 		return;
 	}
-	for (const entry of entries) {
-		if (!existsSync(entry)) {
-			fail(label, `yields ${entry}, which does not exist`);
-		}
-	}
 	note(`${label} → ${entries.length} extension entr${entries.length === 1 ? "y" : "ies"}`);
+	for (const entry of entries) await checkModuleImports(entry, label);
 }
 
 /** Check every local path a settings file configures. */
@@ -246,8 +375,13 @@ async function checkSettings(label, settingsPath, baseDir) {
 	for (const key of ["packages", "extensions"]) {
 		const entries = settings[key];
 		if (!Array.isArray(entries)) continue;
-		for (const entry of entries) {
-			if (typeof entry !== "string") continue;
+		for (const raw of entries) {
+			// A package entry may be a string or an object carrying its source.
+			const entry = typeof raw === "string" ? raw : raw?.source;
+			if (typeof entry !== "string") {
+				fail(label, `${key} holds an entry that names no source: ${JSON.stringify(raw)}`);
+				continue;
+			}
 			if (!isLocalPath(entry)) {
 				note(`${label} ${key}: ${entry} → installed by Pi, not a local path`);
 				continue;
@@ -256,9 +390,10 @@ async function checkSettings(label, settingsPath, baseDir) {
 				note(`${label} ${key}: ${entry} → an override pattern, not a path`);
 				continue;
 			}
-			const path = isAbsolute(entry) ? entry : resolve(baseDir, entry);
+			const normalized = normalizePath(entry);
+			const path = isAbsolute(normalized) ? normalized : resolve(baseDir, normalized);
 			if (key === "packages") await checkPackagePath(`${label} packages: ${entry}`, path);
-			else checkExtensionPath(`${label} extensions: ${entry}`, path);
+			else await checkExtensionPath(`${label} extensions: ${entry}`, path);
 		}
 	}
 }
@@ -271,7 +406,7 @@ console.log(`repository: ${REPO_ROOT}`);
 console.log("");
 
 await checkSettings("global", join(AGENT_DIR, "settings.json"), AGENT_DIR);
-await checkSettings("project", join(PROJECT_DIR, ".pi", "settings.json"), PROJECT_DIR);
+await checkSettings("project", join(PROJECT_DIR, ".pi", "settings.json"), PROJECT_BASE_DIR);
 
 // The repository's own root, whether or not it is configured: it must be
 // loadable, because pointing a configuration at it is the supported way to
