@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # The scratch-waiver test drives gentle-pi's own TypeScript source, which
+      # node cannot strip inside node_modules. bun can, so the test runs under
+      # bun and skips when it is unavailable.
+      - uses: oven-sh/setup-bun@v2
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
