@@ -140,32 +140,40 @@ test("evaluatePathScope refuses a target it cannot resolve", () => {
 
 test("a user override beats the packaged default", () => {
 	const packaged = mkdtempSync(join(tmpdir(), "core-packaged-"));
+	const agentDir = mkdtempSync(join(tmpdir(), "core-agent-"));
+	const previousAgentDir = process.env.PI_AGENT_DIR;
+	process.env.PI_AGENT_DIR = agentDir;
 	try {
 		mkdirSync(packaged, { recursive: true });
-		writeFileSync(
-			join(packaged, "local.json"),
-			JSON.stringify({ domain: "local", always_block: [], always_confirm: [], always_allow: [] }),
-		);
+		mkdirSync(join(agentDir, "policies"), { recursive: true });
+		for (const domain of ["local", "core-test-domain"]) {
+			writeFileSync(
+				join(packaged, `${domain}.json`),
+				JSON.stringify({ domain, always_block: [], always_confirm: [], always_allow: [] }),
+			);
+		}
 
-		// "local" has a user override on this machine, so it must win.
+		// With a user file present, it wins.
+		writeFileSync(
+			join(agentDir, "policies", "local.json"),
+			JSON.stringify({ domain: "local", always_block: [{ pattern: "user-override" }], always_confirm: [], always_allow: [] }),
+		);
 		const withOverride = resolvePolicyPath("local", packaged);
 		assert.equal(withOverride.origin, "user");
-		assert.ok(withOverride.path.startsWith(userPolicyDir()), withOverride.path);
+		assert.equal(withOverride.path, join(agentDir, "policies", "local.json"));
+		// And the override's rules are the ones that take effect.
+		assert.equal(loadPolicy("local", packaged).always_block[0]?.pattern, "user-override");
 
-		// A domain with no user file falls back to the packaged default.
+		// With no user file, the packaged default is used.
 		const withoutOverride = resolvePolicyPath("core-test-domain", packaged);
 		assert.equal(withoutOverride.origin, "packaged");
 		assert.equal(withoutOverride.path, join(packaged, "core-test-domain.json"));
-
-		// And the packaged file is what gets read in that case.
-		writeFileSync(
-			join(packaged, "core-test-domain.json"),
-			JSON.stringify({ domain: "core-test-domain", always_block: [], always_confirm: [], always_allow: [] }),
-		);
-		const loaded = loadPolicy("core-test-domain", packaged);
-		assert.equal(loaded.domain, "core-test-domain");
+		assert.equal(loadPolicy("core-test-domain", packaged).domain, "core-test-domain");
 	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_AGENT_DIR;
+		else process.env.PI_AGENT_DIR = previousAgentDir;
 		rmSync(packaged, { recursive: true, force: true });
+		rmSync(agentDir, { recursive: true, force: true });
 	}
 });
 
