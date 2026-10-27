@@ -20,6 +20,20 @@ it has to come from the harness's own configuration — not from here.
 | [`pi-bash-policy`](packages/bash-policy) | Confines destructive shell commands to the project folder and temporary directories. |
 | [`pi-git-policy`](packages/git-policy) | Locks commits and pushes to protected branches. |
 
+## The repository is a loadable Pi package
+
+The root of this repository carries a Pi manifest naming the two extensions,
+so a Pi configuration can point at the checkout itself:
+
+```json
+"packages": ["../../Projects/pi-extensions"]
+```
+
+The root also resolves as a module, so it can never reach Pi's module loader
+without an entry point. Both halves are pinned by tests — see
+[docs/load-contract.md](docs/load-contract.md) for the contract, and for the
+failure it prevents.
+
 ## Install
 
 Install one package, or all of them:
@@ -84,6 +98,20 @@ npm install
 npm run typecheck
 npm test
 ```
+
+`npm run check` is the gate: the typecheck, the three package suites, and the
+load contract — the test that fails when this repository stops being a
+loadable Pi package.
+
+There is also a machine-local check, which CI cannot run and a developer
+should:
+
+```sh
+npm run check:installed
+```
+
+It resolves the paths this machine's Pi configuration points at, the way Pi
+resolves them, and says so when one of them would not load.
 
 Tests run with Node's built-in runner. Two of them need `bun`, because
 gentle-pi ships TypeScript source and Node cannot strip types inside
