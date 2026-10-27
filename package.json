@@ -5,12 +5,23 @@
 	"description": "Command-policy extensions for the Pi coding agent: a shared engine, a bash policy, and a git policy.",
 	"license": "MIT",
 	"type": "module",
+	"main": "./index.ts",
+	"types": "./index.ts",
+	"exports": {
+		".": "./index.ts"
+	},
+	"pi": {
+		"extensions": [
+			"./packages/bash-policy/src/extension.ts",
+			"./packages/git-policy/src/extension.ts"
+		]
+	},
 	"workspaces": [
 		"packages/*"
 	],
 	"scripts": {
 		"test": "npm run test --workspaces --if-present",
-		"typecheck": "npm run typecheck --workspaces --if-present",
+		"typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present",
 		"check": "npm run typecheck && npm run test"
 	},
 	"devDependencies": {
