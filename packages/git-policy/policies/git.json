@@ -1,0 +1,54 @@
+{
+  "domain": "git",
+  "protected_branches": ["main", "master"],
+  "always_block": [
+    {
+      "pattern": "\\bgit\\s+push\\s+(?:[^;&|\\n]*\\s)?(?:--force(?:-with-lease)?|-f)\\b",
+      "reason": "force push rewrites remote history and can destroy someone else's work"
+    },
+    {
+      "pattern": "\\bgit\\s+reset\\s+--hard\\b",
+      "reason": "git reset --hard discards uncommitted changes irreversibly"
+    },
+    {
+      "pattern": "\\bgit\\s+clean\\b(?=[^;&|\\n]*-[^\\s]*f)",
+      "reason": "git clean removes untracked files that cannot be recovered"
+    },
+    {
+      "pattern": "\\bgit(?:\\s+--?\\S+(?:\\s+[^-\\s]\\S*)?)*\\s+push\\b(?=[^;&|\\n]*\\s(?:--all|--mirror)\\b)",
+      "reason": "--all/--mirror push every branch, including protected ones"
+    }
+  ],
+  "always_confirm": [
+    {
+      "pattern": "\\bgit\\s+filter-(?:branch|repo)\\b",
+      "reason": "rewrites the entire history of every ref"
+    },
+    {
+      "pattern": "\\bgit\\s+reflog\\s+(?:expire|delete)\\b",
+      "reason": "expire/delete reflog destroys the recovery path for lost commits"
+    },
+    {
+      "pattern": "\\bgit\\s+update-ref\\b",
+      "reason": "update-ref moves refs directly, bypassing the normal push and merge paths"
+    },
+    {
+      "pattern": "\\bgit\\s+(?:gc|repack)\\b(?=[^;&|\\n]*--(?:prune|aggressive)\\b)",
+      "reason": "pruning or aggressive repack can delete objects still needed by other clones"
+    }
+  ],
+  "always_allow": [
+    {
+      "pattern": "^git\\s+(?:status|log|diff|show|blame|describe|ls-files|rev-parse|shortlog|annotate|add|fetch)\\b"
+    },
+    {
+      "pattern": "^git\\s+branch(?![^;&|\\n]*(?:\\s-[^\\s]*D|\\s-[^\\s]*f|--delete|--force))\\b"
+    },
+    {
+      "pattern": "^git\\s+stash\\s+(?:list|show)\\b"
+    },
+    {
+      "pattern": "^git\\s+remote\\s+-v\\b"
+    }
+  ]
+}
