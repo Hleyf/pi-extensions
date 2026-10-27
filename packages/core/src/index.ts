@@ -365,22 +365,71 @@ export function resolvePolicyPath(domain: string, packagedDir: string): PolicySo
 	return { path: join(packagedDir, `${domain}.json`), origin: "packaged" };
 }
 
-export function loadPolicy(domain: string, packagedDir: string): DomainPolicy {
-	const { path } = resolvePolicyPath(domain, packagedDir);
+function readPolicyFile(path: string, domain: string, requireComplete: boolean): DomainPolicy {
 	const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
 	if (parsed === null || typeof parsed !== "object") {
 		throw new Error(`policy ${domain}.json is not an object`);
 	}
 	const policy = parsed as Partial<DomainPolicy>;
 	for (const key of ["always_block", "always_confirm", "always_allow"] as const) {
-		if (!Array.isArray(policy[key])) {
-			throw new Error(`policy ${domain}.json is missing a ${key} array`);
+		if (policy[key] === undefined) {
+			if (requireComplete) {
+				throw new Error(`policy ${domain}.json is missing a ${key} array`);
+			}
+			policy[key] = [];
+		} else if (!Array.isArray(policy[key])) {
+			throw new Error(`policy ${domain}.json has a malformed ${key} array`);
 		}
 	}
 	if (policy.path_scoped !== undefined && !Array.isArray(policy.path_scoped)) {
 		throw new Error(`policy ${domain}.json has a malformed path_scoped entry`);
 	}
 	return policy as DomainPolicy;
+}
+
+/**
+ * Merge a user override onto the packaged default.
+ *
+ * The override REPLACES nothing it does not mention. Without this, a user
+ * wanting to add one branch to the protected list would have to copy the whole
+ * packaged file, and every future default would be stranded in the package
+ * rather than reaching them.
+ *
+ *   - `protected_branches` and `allowed_roots`: the user's value wins outright.
+ *   - The rule lists: the user's rules are ADDED to the packaged ones.
+ *   - `path_scoped`: merged by command name, so a user can replace the rule
+ *     for one command and leave the rest alone.
+ */
+function mergePolicies(base: DomainPolicy, override: DomainPolicy): DomainPolicy {
+	const merged: DomainPolicy = {
+		domain: override.domain ?? base.domain,
+		always_block: [...base.always_block, ...override.always_block],
+		always_confirm: [...base.always_confirm, ...override.always_confirm],
+		always_allow: [...base.always_allow, ...override.always_allow],
+	};
+	const branches = override.protected_branches ?? base.protected_branches;
+	if (branches !== undefined) merged.protected_branches = branches;
+	if (base.path_scoped !== undefined || override.path_scoped !== undefined) {
+		const byCommand = new Map<string, PathScopeRule>();
+		for (const rule of base.path_scoped ?? []) byCommand.set(rule.command, rule);
+		for (const rule of override.path_scoped ?? []) byCommand.set(rule.command, rule);
+		merged.path_scoped = [...byCommand.values()];
+	}
+	return merged;
+}
+
+/**
+ * Load a domain's policy: the packaged default, with the user's override
+ * merged onto it when one exists.
+ */
+export function loadPolicy(domain: string, packagedDir: string): DomainPolicy {
+	const user = join(userPolicyDir(), `${domain}.json`);
+	if (!existsSync(user)) {
+		return readPolicyFile(join(packagedDir, `${domain}.json`), domain, true);
+	}
+	const base = readPolicyFile(join(packagedDir, `${domain}.json`), domain, true);
+	const override = readPolicyFile(user, domain, false);
+	return mergePolicies(base, override);
 }
 
 export function loadPolicySet(domains: readonly string[], packagedDir: string): PolicySet {
