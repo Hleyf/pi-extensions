@@ -28,4 +28,13 @@ jobs:
 
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+
+      # The three package suites, then the load contract.
+      #
+      # The contract has its own step because it is the test that fails when
+      # this repository stops being a loadable Pi package: a workspace root
+      # with neither a manifest nor an entry point is handed to Pi's module
+      # loader, and every agent process dies with "Cannot find module" before
+      # the agent starts. That happened once. It must not happen quietly again.
+      - run: npm run test:packages
+      - run: npm run test:contract

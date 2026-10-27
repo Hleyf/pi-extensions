@@ -301,6 +301,60 @@ packaged force-push and reset --hard rules with it. The override now merges:
 configuration values win outright, rule lists are added, and path-scoped rules
 merge by command name.
 
+### S16 — The load contract
+
+**The repository is a loadable Pi package, and that is a contract.** The
+repository was restructured into an npm workspace monorepo, and the workspace
+root is a directory with neither an entry point nor a Pi manifest. A machine's
+Pi configuration still pointed at that root, so Pi handed the directory itself
+to the module loader and every agent subprocess died before the agent
+started:
+
+```
+Error: Failed to load extension "/home/hleyf/Projects/pi-extensions":
+Failed to load extension: Cannot find module '/home/hleyf/Projects/pi-extensions'
+```
+
+Nothing about the policies was wrong. The packaging was wrong, so the
+packaging is what is pinned.
+
+**Five rules, all enforced:**
+
+1. The root `package.json` carries a `pi` manifest naming the extensions this
+   workspace ships.
+2. Every named entry exists on disk, inside this repository.
+3. The root names exactly the union of the workspace packages' manifests:
+   nothing declared twice, nothing missing.
+4. Every entry module imports cleanly and exports a default extension
+   factory — the same import Pi performs, over the same module graph.
+5. The root resolves as a module, so "Cannot find module" is impossible for
+   this path whatever a loader does with the manifest.
+
+**The decision: the fix lives in the repository, not in the machine's
+configuration.** Two ways existed to make the root loadable again: give the
+root a Pi manifest, or point the configuration at the two packages that
+already have one. The manifest was chosen, because the configuration belongs
+to the owner of the machine and is read by every session on it, while the
+repository may declare where its own extensions live. The second way also
+leaves the repository's root unnamed as far as Pi is concerned, and would
+leave the next restructure free to break it again.
+
+**Two halves, because they are true on different machines.** The contract
+above is true everywhere, so it is in the suite and in CI. Whether the
+configuration on THIS machine points at something that loads is true on one
+machine only, so it is a separate opt-in check (`npm run check:installed`)
+that reads the configuration and never writes it.
+
+**The guard must be able to fail.** A test that cannot fail is the defect
+this work exists to remove, so the contract was broken on purpose in a
+scratch copy and the failure observed: with the manifest, the module entry
+and the index file all removed — the shape the monorepo restructure left
+behind — all six assertions fail and the loader test reports the very error
+above; with only the manifest removed, five fail and the loader reports
+that the root no longer exports a factory; with a manifest naming a file
+that does not exist, four fail; with a manifest naming only one of the two
+extensions, the drift assertion fails.
+
 ## Tasks
 
 | ID | Specs | Route | Commit |
@@ -320,6 +374,10 @@ merge by command name.
 | T13 | S13 | inline | monorepo scaffolding, CI, licence, README |
 | T14 | S13 | inline | install into Pi, atomic cutover, end-to-end verification |
 | T15 | S14, S15 | inline | CI, branch protection, override merge, prose false positive |
+| T16 | S16 | inline | root Pi manifest, root module entry, root tsconfig (`1c5bbde`) |
+| T17 | S16 | inline | the contract suite: `tests/load-contract.test.ts`, `tests/pi-loads-repository.test.ts` (`3aae41d`) |
+| T18 | S16 | inline | the machine-local check: `scripts/check-configured-paths.mjs` (`e4fd745`) |
+| T19 | S16 | inline | CI step, `docs/load-contract.md`, README, the fail-direction proof (this commit) |
 
 No Engram mirror: no `mem_*` tool is available in this session.
 
@@ -436,3 +494,161 @@ than left implicit:
   moves main, as do `git revert` and `git reset` on main. Only `commit` and
   `push` were specified. Adding them is one more entry in
   `BRANCH_LOCKED_VERBS`.
+
+### The load contract (third round)
+
+- L2 (original request, verbatim): "fix the package so it stops breaking pi,
+  and make it unable to break pi again" — "Every agent subprocess that loads
+  the extension package dies before the agent starts" — "A fix that only
+  restores today's state leaves the next restructure free to break it again.
+  The deliverable is a guard that fails loudly, inside the repository, not a
+  promise." — "Commit on a feature branch in the pi-extensions repository,
+  never on main, and open a PR that names the problem and the guard."
+
+**What the state actually was when this round started.** The configuration
+that broke Pi had already been changed, seventeen minutes before the round
+began: the global `packages` array no longer names the repository, and the
+two extensions had been copied into `~/.pi/agent/extensions/` as plain
+`.ts` files. Pi therefore started again — and the copies are a *deployment*,
+not a *fix*: they must be re-copied by hand after every edit, they are the
+adapted variants of the sources rather than the sources themselves, and the
+repository was still a directory Pi could not load. The packaging defect this
+round was asked to remove was therefore still present, and the repository is
+where it can be removed.
+
+**Decisions.**
+
+- **The manifest, not the configuration.** Two ways existed to make the root
+  loadable: a `pi` manifest on the root package, or pointing the
+  configuration at `packages/bash-policy` and `packages/git-policy`. The
+  manifest was chosen. The configuration is the owner's, is read by every
+  session on the machine, and this repository does not change it; the
+  manifest keeps the fix inside the repository and makes it self-describing.
+  The second way also leaves the root unnamed as far as Pi is concerned, and
+  leaves the next restructure free to break it again.
+- **The root gets a module entry as well.** `main` points at a root
+  `index.ts` that re-exports the engine, and `exports` names the same file
+  for a bare-specifier import. The manifest is what Pi reads; the module
+  entry is what makes "Cannot find module" impossible for this path even for
+  a loader that ignores the manifest. `main` is the load-bearing half: a
+  directory is resolved by its `main` or an index file, and `exports` is not
+  consulted for a path. Both halves are asserted.
+- **The contract is in the suite; the configuration is in a separate
+  opt-in check.** The suite must hold in CI, so it may not read the owner's
+  home directory. `npm run check:installed` may, and is never run by CI.
+- **Pi's own loader is the end-to-end oracle.**
+  `tests/pi-loads-repository.test.ts` points Pi's `DefaultResourceLoader` at
+  this repository through a scratch agent directory and asserts that both
+  extensions resolve, that each registers its `tool_call` handler, and that
+  nothing errors. It is the test that would have failed on the day the
+  monorepo arrived.
+- **The policies did not change.** The work is packaging, so no policy, no
+  rule and no behaviour was touched.
+
+**Evidence.**
+
+- The failure, reproduced through Pi's loader with the pre-fix shape (no
+  manifest, no entry point): `Failed to load extension: Cannot find module
+  '<repo>'`, with the require stack inside Pi's own extension loader.
+- The fix, same loader, same settings: two extensions resolved, zero errors,
+  zero warnings.
+- The guard, broken on purpose in a scratch copy: with the manifest, the
+  module entry and the index file removed — the shape the monorepo restructure
+  left behind — all six assertions fail and the loader assertion carries the
+  exact "Cannot find module" text; with only the manifest removed, five fail;
+  with a manifest naming a file that does not exist, four fail; with a
+  manifest naming only one of the two extensions, the drift assertion fails.
+- The machine-local check, against a configuration pointing at the broken
+  copy: it names the failure and exits non-zero; against the fixed copy it
+  reports every configured path as loading.
+
+**Not fixed here, and it is not mine to fix.** The installed `gentle-pi` has
+drifted from the scratch-deletion contract this repository documents: two of
+the documented counter-examples are now waived by the installed runtime, so
+`packages/core/tests/scratch-waiver.test.ts` fails on this machine. It fails
+on `main` as well — the test is doing exactly what it was written to do — and
+it skips in CI, where gentle-pi is not installed. Changing the documented
+contract is a separate decision about gentle-pi, not part of a packaging fix.
+
+**The slice boundary.** The branch carries four commits, each one work unit:
+the packaging fix (48 authored lines), the contract suite and its CI step
+(231), the machine-local check (293), and this documentation (about 200). The
+whole branch is larger than the 400-line review budget, and it is delivered
+as ONE pull request anyway, for two reasons: the deliverable is one thing —
+a repository that loads, and a guard that says so — and splitting it across
+stacked pull requests would put the fix and the guard that verifies it in
+different reviews, which is the opposite of what the guard is for. The
+commits are the slices a reviewer can take one at a time, and the earlier
+pull requests in this repository were larger than the budget as well (1869
+and 992 inserted lines).
+
+### Verification of this round
+
+**The native review could not be collected.** The native review was started
+through the review controller — three lenses, risk, readability and
+reliability, on the committed range — and the lineage was created. Every
+capture attempt was refused by the controller with "collectBinding is missing
+or stale for current STATUS", for the one-slot route and for the whole group,
+with the binding copied exactly as the status issued it. The controller
+negotiates its own fresh status for the capture, and that status does not
+carry the collect inputs the public status publishes. The review is
+informational and authorises nothing, so the round continued without it and
+the lineage is left open rather than forced.
+
+It was tried twice, on two lineages and two targets: once on the range as it
+stood before the independent verifier's findings were fixed, and once on the
+final range, after them. Both times the controller created the lineage,
+published three collect inputs for the three lenses, and then refused every
+capture of them — the group route with "collectBindings must be the complete
+distinct current reviewer group in exact provider order" and the one-slot
+route with "collectBinding is missing or stale for current STATUS". Both
+messages name the binding as wrong when it is the one the same status had
+just published, which is the signature of the controller's fresh status and
+its published status disagreeing. No capture was forced and no acknowledgement
+was attempted.
+
+**An independent verifier did the work instead.** A read-only verifier was
+pointed at the committed range and asked six questions: can the guard fail,
+is the suite machine-independent, are the assertions real, does the
+machine-local script mirror Pi's rules, is the extensions' behaviour
+untouched, and is the gate green. Its answers: yes, yes (with one caveat
+about process-level reads), yes, no, yes, and green except the pre-existing
+failure above.
+
+**What the verifier found, and what was done about it.** The script's rules
+were close to Pi's but not Pi's, and a check that reports a different
+verdict from the platform it checks is worse than no check. Seven
+divergences were reproduced against Pi's own loader as the oracle and fixed:
+
+- a manifest is a manifest as soon as `pi` is an object: `pi: {}` and a
+  manifest naming only skills are packages to Pi, and neither reaches the
+  module loader. The script used to call both a crash.
+- a manifest entry may be a glob or an override pattern. Pi expands the glob
+  and lets the pattern select; the script resolved both literally.
+- a manifest entry that does not exist is skipped SILENTLY by Pi. The script
+  reports it, deliberately: a policy that silently is not loaded is not
+  loaded. That strictness is stated in the script and in the document.
+- a package directory with a `main` and no manifest loads; only a directory
+  with neither a manifest, a resource directory, nor a module entry reaches
+  the module loader. The script reported the crash for the first case too.
+- project-scope paths resolve against the project's own `.pi` directory, not
+  against the working directory.
+- `~` and `file://` paths expand.
+- a package entry may be an object carrying its `source`.
+
+The verifier also found that a configured extension that does not import was
+reported as loading, because the import check was limited to this
+repository's own files. It now imports every entry it checks, exactly as Pi
+does, and the script says so in its header.
+
+The verdict was then checked against Pi's own loader, scenario by scenario:
+a package with an empty manifest, one with only skills, one whose manifest
+entry is a glob, one with a `main` and no manifest, one with only `exports`,
+one whose extension does not parse, a configured extension file that does
+not parse, a project-scope relative path, and an object-form package entry.
+The script and Pi now agree on all nine.
+
+The documentation was corrected where it overstated: `main` is the
+load-bearing half of the module entry, `exports` is not consulted for a
+path, and the count of assertions that fail depends on how much of the
+contract is broken.
