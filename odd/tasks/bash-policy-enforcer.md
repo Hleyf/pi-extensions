@@ -595,6 +595,18 @@ carry the collect inputs the public status publishes. The review is
 informational and authorises nothing, so the round continued without it and
 the lineage is left open rather than forced.
 
+It was tried twice, on two lineages and two targets: once on the range as it
+stood before the independent verifier's findings were fixed, and once on the
+final range, after them. Both times the controller created the lineage,
+published three collect inputs for the three lenses, and then refused every
+capture of them — the group route with "collectBindings must be the complete
+distinct current reviewer group in exact provider order" and the one-slot
+route with "collectBinding is missing or stale for current STATUS". Both
+messages name the binding as wrong when it is the one the same status had
+just published, which is the signature of the controller's fresh status and
+its published status disagreeing. No capture was forced and no acknowledgement
+was attempted.
+
 **An independent verifier did the work instead.** A read-only verifier was
 pointed at the committed range and asked six questions: can the guard fail,
 is the suite machine-independent, are the assertions real, does the
