@@ -1,0 +1,58 @@
+{
+  "domain": "local",
+  "path_scoped": [
+    {
+      "command": "rm",
+      "allowed_roots": ["<project>", "<tmpdir>", "/tmp", "/var/tmp"],
+      "reason": "rm may only target the project folder or a temporary directory"
+    }
+  ],
+  "always_block": [
+    {
+      "pattern": "\\bmkfs(?:\\.[a-z0-9]+)?\\s+/dev/",
+      "reason": "mkfs destroys the filesystem contents of a block device"
+    },
+    {
+      "pattern": ">\\s*/dev/(?:sd|nvme|hd|vd)[a-z0-9]*",
+      "reason": "raw write redirection to a block device destroys its contents"
+    },
+    {
+      "pattern": "\\b(?:wipefs|sgdisk\\s+--zap-all)\\b",
+      "reason": "wipes partition or disk metadata irrecoverably"
+    }
+  ],
+  "always_confirm": [
+    {
+      "pattern": "\\bdd\\b[^;&|\\n]*\\bof=",
+      "reason": "dd writes raw bytes to its of= target and cannot be undone"
+    },
+    {
+      "pattern": "\\bshred\\b",
+      "reason": "shred overwrites file contents in place"
+    },
+    {
+      "pattern": "\\btruncate\\b[^;&|\\n]*\\s-s",
+      "reason": "truncate -s changes a file's size in place"
+    },
+    {
+      "pattern": "\\bcurl\\b[^;&|\\n]*\\|\\s*(?:sudo\\s+)?(?:sh|bash|zsh|fish|python3?)\\b",
+      "reason": "piping a downloaded script straight into a shell runs unreviewed remote code"
+    },
+    {
+      "pattern": "\\bchmod\\s+(?:-R\\s+)?[0-7]*(?:777|666)\\b",
+      "reason": "world-writable permissions"
+    },
+    {
+      "pattern": "\\bmv\\b[^;&|\\n]*\\s/(?:etc|usr|bin|sbin|boot|lib|lib64)\\b",
+      "reason": "moving files into a system directory"
+    }
+  ],
+  "always_allow": [
+    {
+      "pattern": "^(?:npm|pnpm|yarn|bun|node|npx|make|cargo|go|python3?|pip3?|tsc|eslint|prettier|vitest|jest|pytest|ruff|mypy)\\b"
+    },
+    {
+      "pattern": "^(?:ls|cat|head|tail|wc|echo|pwd|which|rg|grep|printf|jq|sort|uniq|diff|basename|dirname)\\b"
+    }
+  ]
+}
